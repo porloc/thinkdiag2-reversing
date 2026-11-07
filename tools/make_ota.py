@@ -82,7 +82,7 @@ def main():
         import secrets
         sk = secrets.token_bytes(8)
 
-    print('ВНИМАНИЕ: формат сессионной строки и подписи不完全 известен —')
+    print('ВНИМАНИЕ: формат сессионной строки и подписи не полностью известен —')
     print('результат не пройдёт верификацию RSA на стоковом бутлоадере.')
     print('См. докstring этого файла и PROGRESS.md.')
     data = build_download(app, sk, serial)
