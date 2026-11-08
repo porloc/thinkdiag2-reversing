@@ -11,3 +11,4 @@ brute_des2
 staged_decrypted.bin
 ota_handler.asm
 download_unpacked_mini/
+ads_boot/
