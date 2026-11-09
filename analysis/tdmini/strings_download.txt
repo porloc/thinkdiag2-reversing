@@ -1,0 +1,2 @@
+0800eaec: 'DOWNLOAD.BIN' (string)
+0803c298: 'LAUNCHPRIVELIBJM' (string)
