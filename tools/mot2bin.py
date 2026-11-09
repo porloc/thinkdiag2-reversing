@@ -2,6 +2,19 @@
 """Convert Motorola S-record to binary image."""
 import sys, re
 
+FLASH_BASE = 0x00400000
+FLASH_SIZE = 0x100000
+
+def srec_to_bin(path, base=FLASH_BASE, size=FLASH_SIZE, fill=0xFF):
+    """S-record → плоский бинарный образ флеша (base..base+size)."""
+    out = bytearray([fill]) * size
+    for a, d in parse_mot(path):
+        off = a - base
+        if off < 0 or off + len(d) > size:
+            continue
+        out[off:off + len(d)] = d
+    return bytes(out)
+
 def parse_mot(path):
     base = None
     regions = []
