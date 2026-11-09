@@ -5,3 +5,4 @@ jdk/
 __pycache__/
 *.pyc
 unpacked/
+analysis_decomp/cache/
