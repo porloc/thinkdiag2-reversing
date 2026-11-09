@@ -1,50 +1,46 @@
 # Thinkdiag 2 — Reverse Engineering
 
-Реверс-инжиниринг OTA-обновлений диагностического адаптера **Thinkcar Thinkdiag 2**.
+Реверс-инжиниринг OTA-обновлений диагностических адаптеров **Thinkcar Thinkdiag 2 / DB7 / ThinkDiag Mini / XDiag DBSCarIII**.
+
+## Документация
+
+| Документ | Содержимое |
+|---|---|
+| **BOOTLOADERS.md** | ⭐ Алгоритмы работы ВСЕХ бутлоадеров (TD2/DB7/TDMini/XDiag/ADS): старт, командный протокол, OTA, крипто, верификация, запуск приложения |
+| PROGRESS.md | Журнал всех сессий реверса (этапы 1–35) |
+| ANALYSIS_REPORT.md | Сессия 5: шифр DOWNLOAD.BIN = кастомный 2-раундовый AES (восстановлено из сводки) |
 
 ## Результаты
 
 | Компонент | Статус |
 |---|---|
-| Карта флеша, трейлеры регионов | ✅ полностью |
-| OTA-протокол бутлоадера (USB-CDC, пакеты 0x0D) | ✅ полностью |
-| Транспортный шифр = **DES** (точная реализация) | ✅ полностью |
+| Карта флеша, трейлеры регионов (TD2/DB7) | ✅ полностью |
+| OTA-протокол бутлоадера (USB-CDC, ASCII-команды + cmd 0x0D) | ✅ полностью |
+| Транспортный шифр = **DES** (LSB-first) / 3DES-EDE | ✅ полностью |
 | Верификация = **MD5 + RSA-1753** (PKCS#1 v1.5) | ✅ полностью |
-| Ключ сессионного пакета `SN[4:8]+SN[2:6]` | ✅ формула |
-| Алгоритм LAUNCH → скрипт `unpack_downloadbin_td2.py` | ✅ **0 отличий на дампе** |
-| Реверс бутлоадера TDMini (новое поколение) | ✅ полностью |
-| Крипто TDMini = **смарт-карта** (APDU `F0 99 ...`) | ✅ доказано |
-| Инструменты unpack/pack для программатора | ✅ **roundtrip 0 отличий** |
-| Расшифровка DOWNLOAD.bin V12.05 офлайн | ❌ **невозможна** (ключи в карте) |
+| **Каскад загрузки DB7** (self-verify → boot-manager → app) | ✅ Сессия 6 |
+| **Запуск приложения** (launch/boot_check, backup-регистры) | ✅ Сессия 6 |
+| Алгоритм LAUNCH → `unpack_downloadbin_td2.py` | ✅ **0 отличий на дампе** |
+| Реверс бутлоадера TDMini (смарт-карта, APDU F0 99) | ✅ Сессия 3 |
+| Шифр DOWNLOAD.BIN V12.05 = кастомный 2-раундовый AES (tdmini app) | ✅ Сессия 5 |
+| Пиратский ADS-бут: AES+ARX шифр, статические ключи | ✅ Сессия 4 |
+| Расшифровка DOWNLOAD.bin V12.05 офлайн | ⚠️ ключ верифицирован, decrypt_tool.py потерян (нужен tdmini-дамп) |
 
-## Платформа
-- **MCU: Microchip ATSAME70Q20A** (Cortex-M7, 1MB flash @0x00400000, 384KB RAM)
-- Бутлоадер V1.23.004 (TD2) / V1.22.004 (DB7), IAR, USB CDC ("USBToSerial")
-- Приём OTA: бутлоадер по USB-CDC, файлы **DOWNLOAD.BIN** (приложение) / **J2534.BIN**
+## Платформы
+- **TD2/DB7**: Microchip ATSAME70Q20A (Cortex-M7, 1MB flash @0x00400000), IAR, USB CDC
+- **TDMini/XDiag**: STM32/GD32 (флеш @0x08000000); XDiag = GD32F403RK
+- **ADS (пиратский)**: STM32F1
 
-## Карта флеша
-```
-0x00400000-0x00410000  Бутлоадер          [трейлер: флаг+подпись+BE32 размер]
-0x00420000             Конфиг (13Б)
-0x0043F800             Байт-флаг
-0x00440000-0x004A0000  Стейджинг/ресурсы (зашифрованные)
-0x004A0000+            ПРИЛОЖЕНИЕ (plaintext, векторная таблица M7)
-конец app-региона      [трейлер: флаг(1)+подпись RSA(219)+0xDC+BE32 размер]
-  TD2: регион до 0x004FF000; DB7: до 0x00500000
-```
+## Два поколения бутлоадеров
 
-## OTA-протокол (из реверса бутлоадера)
-```
-USB-CDC пакет: [cmd u16][u16 BE длина][данные]
-1-й пакет 0x0D: "DOWNLOAD.BIN\0" (13Б, plaintext) + u32 BE размер (макс 0x5F800)
-                → erase(0x440000); цель := стейджинг
-2-й пакет:      сессионная строка, DES-зашифрована ключом "0"+SN[2:6]
-                → внутри случайный сессионный ключ (байты 0,1,8,9,10,11,16,17)
-                → erase(0x4A0000)
-далее:          данные образа, DES сессионным ключом → флеш 0x4A0000
-финал:          MD5(образа) + RSA-1753 verify:
-                токен = [SN 13Б][0x05][u32][MD5], PKCS#1 v1.5, e=65537
-```
+| | TD2/DB7 (старое) | TDMini (новое) |
+|---|---|---|
+| Заголовок файла | нет (чанки сразу) | TLV 0x1000Б (ver=2) |
+| Запись | стейджинг 0x440000 → запуск | прямо 0x08010000 |
+| Шифр payload | софтверный DES (LSB-first) | AES-128 в смарт-карте (APDU F0 99) |
+| Ключ чанков | SN-ключ + мастер-таблица | сессионный блоб → карта |
+| RSA-1753 | TD2: N @0x40D828/0x40DA2C; DB7: +J2534 @0x40C594 | N @0x0800DC4C (другой) |
+| Офлайн-расшифровка | ✅ (скрипт, 0 отличий) | ⚠️ см. ANALYSIS_REPORT.md |
 
 ## Инструменты
 ```bash
@@ -55,49 +51,40 @@ python3 tools/unpack_firmware.py "original TD2.mot" -o unpacked
 python3 tools/pack_flash.py --boot unpacked/bootloader.bin \
     --app my_modified_app.bin --trailer unpacked/app_trailer.bin \
     --config unpacked/config_420000.bin -o flash_image
-# → flash_image.bin (1MB) + flash_image.mot (S-record)
 
-# Анализ OTA-пакета (+ попытка расшифровки с серийником)
-python3 tools/unpack_download.py DOWNLOAD.bin 989149735933
-
-# DES бутлоадера (LSB-first биты = bit-reversed DES)
-python3 tools/des_thinkdiag.py
-
-# ПОЛНЫЙ алгоритм LAUNCH бутлоадера TD2 (старое поколение, софтверный DES)
-# Самопроверка на дампе: 380 чанков → 0 отличий от приложения @0x4A0000
+# ПОЛНЫЙ алгоритм LAUNCH бутлоадера TD2 (самопроверка: 0 отличий)
 python3 tools/unpack_downloadbin_td2.py --dump fw_extract/TD2.bin
-python3 tools/unpack_downloadbin_td2.py DOWNLOAD.bin --sn 989149735933
 
-# Алгоритм LAUNCH бутлоадера TDMini (новое поколение, смарт-карта)
-# Проверяет TLV-заголовок V12.05, строит APDU для replay на живую карту
-python3 tools/unpack_downloadbin_tdmini.py DOWNLOAD.bin --try-keys --apdu replay.bin
+# Алгоритм мини-поколения (TLV + APDU-replay для живой карты)
+python3 tools/unpack_downloadbin_tdmini.py DOWNLOAD.bin --apdu replay.bin
+
+# Пиратский ADS-бут: decode/encode кастомного AES+ARX
+python3 tools/unpack_downloadbin_ads.py
+
+# DES бутлоадера (LSB-first = bit-reversed DES)
+python3 tools/des_thinkdiag.py
 ```
 
-## Важное про подпись и кастомные прошивки
-- Верификация RSA выполняется после OTA-приёма; закрытый ключ на сервере Thinkcar
+## Важно про подпись и кастомные прошивки
+- RSA проверяется ТОЛЬКО после OTA-приёма; **при загрузке приложения — нет**
+  (TD2: boot_check не верифицирует образ; DB7: self-verify только СВОЕГО региона)
 - **При заливке внешним программатором подпись не проверяется** — pack_flash.py
-  позволяет прошивать модифицированные приложения напрямую
 - Для приёма кастомных OTA стоковым бутлоадером — патч вызова verify
-  (DB7: 0x40A0B0; NOP) + пересборка образа программатором
+  (DB7: 0x40A0B0 → NOP) + пересборка образа
 
-## Два поколения бутлоадеров
+## Ghidra (Сессия 6)
+```bash
+export JAVA_HOME=/usr/lib/jvm/java-21-openjdk-amd64
+$GHIDRA/support/analyzeHeadless <proj> <name> -import boot.bin \
+  -processor ARM:LE:32:Cortex -loader BinaryLoader -loader-baseAddr 00400000 \
+  -scriptPath ghidra_scripts -preScript MarkEntries.py "ADDRS" \
+  -postScript DumpDecomp.py out.c -deleteProject
+```
+Скрипты в `ghidra_scripts/`: MarkEntries.py (вектора+сиды), DumpDecomp.py
+(декомпиляция), FindXrefs.py (ссылки). Подробности и патч launch.sh —
+BOOTLOADERS.md §8.
 
-| | TD2 (старое) | TDMini (новое, тот же номер V1.23.004) |
-|---|---|---|
-| Заголовок файла | нет (чанки сразу) | TLV 0x1000Б: `{LE16 type, LE32 len, data}`, записи 3/5/7 |
-| Запись во флеш | стейджинг 0x440000 → запуск | прямо 0x08010000 (STM32) |
-| Шифр payload | софтверный DES (LSB-first), 8Б блоки | **AES-128 в смарт-карте** (APDU `F0 99 01`), 16Б блоки |
-| Сессионный ключ | селектор → мастер-таблица (конфиг-ФС) | блоб 113Б → карта (APDU `F0 99 00`) |
-| Офлайн-расшифровка | ✅ скриптом | ❌ только карта/сервер |
-
-**V12.05 — файл мини-поколения**: проходит все проверки TLV-парсера мини
-(0x080075DC), 16-байтовая блочность = AES в карте. Ни один ключ из обоих
-дампов не расшифровывает ни блоб, ни payload (проверено скриптом).
-
-## Что нужно для расшифровки DOWNLOAD.bin V12.05
-1. Живое устройство мини-поколения: UART-сниффер к смарт-карте + APDU-replay
-   (последовательность строит `unpack_downloadbin_tdmini.py --apdu`)
-2. ИЛИ извлечение ключей из смарт-карты (аппаратная атака)
-3. ИЛИ ключи с сервера Thinkcar
-
-Подробный журнал анализа — [PROGRESS.md](PROGRESS.md).
+## Что нужно для полной расшифровки V12.05
+1. Повторная загрузка tdmini-дампа (ID `1xHe0q9g…` обрезан) → пересборка
+   decrypt_tool.py (Сессия 5, шифр уже реверсирован)
+2. ИЛИ живое устройство мини-поколения: UART-сниффер к смарт-карте + APDU-replay
