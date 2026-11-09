@@ -697,3 +697,86 @@ ABAB объясняется блочностью этого AES, а не «AES �
       для Ghidra-разбора их бутов (§3/§4 сейчас — из знаний прошлых сессий)
 - [ ] Разбор DB7 boot-manager @0x480000 (полный алгоритм DoBoot)
 - [ ] Пересборка decrypt_tool.py (Сессия 5) после загрузки tdmini-дампа
+
+---
+
+# Сессия 7: восстановление дампов tdmini/xdiag + Ghidra-разбор их бутов → BOOTLOADERS.md §3/§4
+
+## Этап 36. Дампы восстановлены ✅
+
+Пользователь повторно предоставил полные ссылки:
+- tdmini `1xHe0q9gCBXmSZ5fBkXwhZ79wRSnagHmx` → ZIP → `Project thinkdiagmini.bin`
+  (384KB, векторы 100% совпали с Сессией 3: SP=0x200122d0, reset=0x0800eb3d)
+- xdiag `1kc3_cg6Bqad3JmVl7ecTOwDjtK3Ez3I8` → 1MB (SP=0x20018388,
+  reset=0x0800e0b1, V1.23.007 ✓)
+- td2 (ссылка та же, дамп уже был)
+Скачивание: `https://drive.usercontent.google.com/download?id=<ID>&export=download&confirm=t`
+
+## Этап 37. TDMini бут — полный Ghidra-разбор ✅✅✅
+
+Ghidra 11.0.3 (base 0x08000000) + Unicorn-эмуляция IAR-init. НОВАЯ МЕТОДИКА:
+вtable RAM-объекта (@0x20000000, 0x2313Б) восстанавливается эмуляцией
+packed-copy хендлера (0x0800e4a4) → указатели main-task/каскада без железа.
+
+- Старт: reset → RCC (PLL 0x10649) → FPU → IAR init (zero .bss 0x15a4@
+  0x200122d0 + packed-copy → объект) → FUN_0800e404 → main: for(;;)
+  obj->[0x20a4]=sub_0800c346
+- **Каскад sub_0800c288**: config-FS (тег 0xDE) RSA → DR4=6/hang; **SELF-VERIFY
+  бута** (RSA @0x0800e054, трейлер @0xEFFC) → DR4=8/hang; смарт-карта
+  presence/auth → DR4=9/hang; SN → app_valid(0x08010000) → launch
+- **launch FUN_080056d4**: классика `cpsid; msr msp,[base]; blx [base+4]`
+- **ГЛАВНОЕ: FUN_0800695a — RSA-verify app РЕЗУЛЬТАТ ИГНОРИРУЕТ** (обе ветви
+  `movs r0,#1`!) → модифицированное приложение запускается (как TD2)
+- BKP DR1..DR42 единый accessor (STM32F1-стиль, 0x40006C00/0x40006C14);
+  смарт-карта = USART2; пины PC0/PC1/PC2; RSA app-ключ @0x0800de50
+- OTA cmd 0x0D: те же статусы TD2; сессия с картой: 32Б → BKP DR6..DR21 →
+  **obj->[8]=1** — триггер запуска; версии (два BE64) → статус 0x24
+
+## Этап 38. XDiag DBSCarIII бут — полный Ghidra-разбор ✅✅✅
+
+- **КАРТА ФЛЕША ИСПРАВЛЕНА** (Сессия 5 ошибалась): бут 0x0-0xE384 + RSA-сиг
+  220Б + flag 0xDC/size @0xFFFB/FFFC (=BE32 0xE384 ✓); **СЛОТ ПРИЛОЖЕНИЯ
+  0x08010000-0x08100000 (0xF0000=960KB!)**: векторы @+0, версия «V11.48»
+  @+0x10000 (=0x08020000!), трейлер слота @+0xEFFB/EFFC; «лицензия @0xFFF20»
+  = на самом деле сигнатура бута. Flash-cap 0x08100000 → чип 1MB.
+- EXMC NE3 @0x64000000 = внешняя память DPU с файловой таблицей
+  (count @0x6400007C, entries 0x4A @0x64000082: namelen/имя/size/addr)
+- Архитектура = то же LAUNCH-поколение (vtable-объект @0x20000400 через
+  segmented-copy 0x0800e1f0; main task [0x209c]=sub_08001ffa; каскад
+  [0x2098]=sub_08001f8e) — 8.4% совпадения с tdmini = другой чип, НЕ другая
+  ветка
+- Транспорт: USB-CDC (« LAUNCH Virtual ComPort», VCP) + модем (AT#MN=%s,
+  AT#IP=0000); выбор при init (FUN_080064f8 = модем готов?)
+- **Каскад**: config тег 0xDE → breg2=6/hang; SELF-VERIFY (RSA @0x08005AB0,
+  трейлер @0xFFFC) → breg2=8/hang; SN → **launch(0x080E0000)** (в дампе
+  стёрто → на этом устройстве каскад уходит в OTA-режим)
+- **Main task**: бут-решение как TD2! mode: SN-префикс ∈ {98249, 98319,
+  98329} → фабричный режим; тег4='1' → бут; «98999» → режим 2; иначе 0.
+  trigger = mode==2 || (mode==0 && breg1≠1) || obj[7] → **RSA-verify слота
+  0x08010000 (гейт! в отличие от tdmini) → launch(0x08010000)**
+- **Отложенное обновление FUN_08001b74 (на каждом старте!)**: таблица DPU →
+  «DOWNLOAD.BIN» size==0xF0000: RSA-verify(staged) → если текущий слот
+  валиден и staged-версия ≤ текущей (@+0x10000) → пропуск; иначе erase+
+  write_verify 0xF0000 → 0x08010000, breg2=0
+- **OTA-ПРОТОКОЛ ОТКРЫТЫЙ**: cmd 0x0D (FUN_08007bcc, статусы TD2) + чанки
+  FUN_08007d70 [BE32 off][BE16 len][data] — **НЕТ ШИФРОВАНИЯ**, защита =
+  RSA-1753 подпись первых 60KB слота. Крипто-таблиц Сессии 5 не нашла,
+  потому что RSA-модули (@0x080058AC/0x08005AB0) табличным сканом не ищутся.
+
+## Итог Сессии 7
+
+- BOOTLOADERS.md: §3 (tdmini) и §4 (xdiag) — полные, Ghidra-верифицированные;
+  исправлена карта флеша XDiag; статусная таблица поколений 6/6 ✅
+- Методика: Unicorn-эмуляция IAR init-хендлеров → восстановление vtable
+  диспетчеров из packed/segmented-copy данных
+- Ключевые открытия: RSA-игнорирование в tdmini main task; RSA-гейт в
+  xdiag main task при свободном от подписи холодном запуске 0x080E0000;
+  открытый OTA DBSCarIII; фабричные SN 98249/98319/98329/98999; DPU-таблица
+  отложенных обновлений @0x64000000
+- Артефакты: analysis/TDMINI_boot_decomp.c, analysis/XDIAG_boot_decomp.c
+
+## TODO
+- [ ] DOWNLOAD.BIN V12.05 повторно (ID `1VlUEu6…` обрезан) — пересборка
+      decrypt_tool.py на восстановленном tdmini-дампе
+- [ ] Слот 0x080E0000 xdiag: дамп >1MB или живое устройство (стёрт в дампе)
+- [ ] Разбор DB7 boot-manager @0x480000
